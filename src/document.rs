@@ -236,7 +236,13 @@ pub struct PdfDocument {
     /// sits near the top/bottom of the page is treated as an artifact.
     /// Populated lazily on first access; `Some(set)` with an empty set
     /// means detection ran and found nothing (vs `None` = not yet run).
-    running_artifact_signatures: Mutex<Option<std::collections::HashSet<String>>>,
+    /// Signatures of running headers/footers plus the first page index where
+    /// each signature was observed. Used to mark repeat occurrences as
+    /// pagination artifacts while keeping the first appearance intact — the
+    /// first appearance is often the document's cover-page title that just
+    /// happens to echo into the header band on every page (B3: pdfa_010
+    /// would otherwise drop "University of Oklahoma 2009").
+    running_artifact_signatures: Mutex<Option<std::collections::HashMap<String, usize>>>,
 }
 
 // Compile-time verification that PdfDocument is Send + Sync.
@@ -6285,21 +6291,24 @@ impl PdfDocument {
     /// clone for matching. The computation scans every page's raw spans,
     /// collects normalized text that appears in the top or bottom 12% of
     /// the page, and keeps entries that recur on >=50% of pages.
-    fn ensure_running_artifact_signatures(&mut self) -> Result<std::collections::HashSet<String>> {
+    fn ensure_running_artifact_signatures(
+        &mut self,
+    ) -> Result<std::collections::HashMap<String, usize>> {
         {
             let guard = self.running_artifact_signatures.lock().unwrap();
-            if let Some(ref set) = *guard {
-                return Ok(set.clone());
+            if let Some(ref map) = *guard {
+                return Ok(map.clone());
             }
         }
         let page_count = self.page_count()?;
         if page_count < 2 {
-            let empty = std::collections::HashSet::new();
+            let empty = std::collections::HashMap::new();
             *self.running_artifact_signatures.lock().unwrap() = Some(empty.clone());
             return Ok(empty);
         }
 
-        let mut occurrences: std::collections::HashMap<String, usize> =
+        // (count of distinct pages seeing the signature, first page it appeared on)
+        let mut occurrences: std::collections::HashMap<String, (usize, usize)> =
             std::collections::HashMap::new();
         for pi in 0..page_count {
             let spans = match self.extract_spans_raw(pi) {
@@ -6347,14 +6356,19 @@ impl PdfDocument {
                 seen_this_page.insert(sig);
             }
             for sig in seen_this_page {
-                *occurrences.entry(sig).or_insert(0) += 1;
+                let entry = occurrences.entry(sig).or_insert((0, pi));
+                entry.0 += 1;
+                // first-seen page is the min of existing and current
+                if pi < entry.1 {
+                    entry.1 = pi;
+                }
             }
         }
         let threshold = (page_count as f32 * 0.5).ceil() as usize;
-        let signatures: std::collections::HashSet<String> = occurrences
+        let signatures: std::collections::HashMap<String, usize> = occurrences
             .into_iter()
-            .filter(|(_, count)| *count >= threshold.max(2))
-            .map(|(sig, _)| sig)
+            .filter(|(_, (count, _))| *count >= threshold.max(2))
+            .map(|(sig, (_, first_seen))| (sig, first_seen))
             .collect();
         *self.running_artifact_signatures.lock().unwrap() = Some(signatures.clone());
         Ok(signatures)
@@ -6394,7 +6408,13 @@ impl PdfDocument {
                 continue;
             }
             let sig = Self::normalize_artifact_signature(trimmed);
-            if signatures.contains(&sig) {
+            if let Some(&first_seen_on) = signatures.get(&sig) {
+                // Keep the first appearance — it's usually the document
+                // cover-page title that got classified as chrome only
+                // because later pages repeat it as a running header (B3).
+                if page_index == first_seen_on {
+                    continue;
+                }
                 s.artifact_type = Some(crate::extractors::text::ArtifactType::Pagination(
                     crate::extractors::text::PaginationSubtype::Other,
                 ));
