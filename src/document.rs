@@ -6206,6 +6206,30 @@ impl PdfDocument {
     pub fn extract_spans(&mut self, page_index: usize) -> Result<Vec<crate::layout::TextSpan>> {
         let mut spans = self.extract_spans_raw(page_index)?;
 
+        // Drop spans whose bbox lies entirely outside the page's MediaBox.
+        // PDFs that reuse one big Form XObject across pages (ExpertPdf and
+        // similar tools — see issue B1 / nougat_005.pdf) rely on the
+        // content stream's `W n` clip rectangle to hide the off-page
+        // portion. Our text extractor doesn't honour `W n` yet, so
+        // without this filter every page emits all 5 pages' worth of
+        // spans at distinct but out-of-bounds Y coordinates. Keep spans
+        // that even partially overlap with MediaBox so we don't drop
+        // legitimate bleed / trim-mark content.
+        if let Ok((mb_x, mb_y, mb_w, mb_h)) = self.get_page_media_box(page_index) {
+            const EDGE_TOLERANCE_PT: f32 = 2.0;
+            let left = mb_x - EDGE_TOLERANCE_PT;
+            let bottom = mb_y - EDGE_TOLERANCE_PT;
+            let right = mb_x + mb_w + EDGE_TOLERANCE_PT;
+            let top = mb_y + mb_h + EDGE_TOLERANCE_PT;
+            spans.retain(|span| {
+                let sx1 = span.bbox.x;
+                let sx2 = span.bbox.x + span.bbox.width;
+                let sy1 = span.bbox.y;
+                let sy2 = span.bbox.y + span.bbox.height;
+                sx2 > left && sx1 < right && sy2 > bottom && sy1 < top
+            });
+        }
+
         // Row-aware reading order: Y-band descending (top→bottom), X
         // ascending within a row.
         spans.sort_by(|a, b| {

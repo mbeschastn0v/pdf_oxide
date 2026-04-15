@@ -4606,8 +4606,21 @@ impl TextExtractor {
         }
 
         // Span result cache: reuse extracted spans from self-contained Form XObjects.
-        // Only works for XObjects with own /Resources (font context is self-contained).
-        if self.extract_spans {
+        //
+        // Spans are stored in CTM-transformed page coordinates, so the cache is
+        // only correct when the caller's CTM matches the one at first extraction.
+        // Issue B1 (nougat_005.pdf): a single Form XObject carries every page's
+        // content, and each page's content stream applies a different CTM
+        // translation to position its viewport into that XObject. Reusing the
+        // cached spans returned page 0's coordinates on every page, so every
+        // page emitted identical cross-page text.
+        //
+        // Safe path: only hit the cache when the current CTM is identity. That
+        // covers the common case (reusable headers/footers stamped at the same
+        // origin) without mixing coordinate systems. For non-identity CTMs we
+        // fall through to the fresh extraction below, which applies the caller's
+        // CTM to each span.
+        if self.extract_spans && self.state_stack.current().ctm.is_identity() {
             let cached_spans = {
                 doc.xobject_spans_cache
                     .lock()
@@ -4825,9 +4838,14 @@ impl TextExtractor {
                     );
                 }
 
-                // Cache span results for self-contained Form XObjects.
-                // Only safe when XObject has own /Resources (font context is independent of page).
-                if has_own_resources && self.extract_spans {
+                // Cache span results for self-contained Form XObjects. Only
+                // safe when the XObject has its own /Resources (font context
+                // is page-independent) AND the current CTM is identity —
+                // otherwise the stored spans are in caller-specific page
+                // coordinates and would poison identity-CTM hits on other
+                // pages (see issue B1).
+                let save_identity_ctm = self.state_stack.current().ctm.is_identity();
+                if has_own_resources && self.extract_spans && save_identity_ctm {
                     let new_spans = if self.spans.len() > spans_before {
                         Some(self.spans[spans_before..].to_vec())
                     } else {

@@ -58,6 +58,20 @@ impl Matrix {
         }
     }
 
+    /// Whether this matrix is the identity (applies no transform).
+    ///
+    /// Callers that cache CTM-transformed coordinates use this to decide
+    /// whether the cache is safe to reuse across invocations — non-identity
+    /// matrices mean coordinates differ per call.
+    pub fn is_identity(&self) -> bool {
+        self.a == 1.0
+            && self.b == 0.0
+            && self.c == 0.0
+            && self.d == 1.0
+            && self.e == 0.0
+            && self.f == 0.0
+    }
+
     /// Create a translation matrix.
     ///
     /// # Examples
