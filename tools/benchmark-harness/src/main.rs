@@ -11,6 +11,7 @@ use std::path::PathBuf;
 mod engine;
 mod report;
 mod score;
+mod sf1;
 
 #[derive(Parser)]
 #[command(name = "benchmark-harness", version, about)]

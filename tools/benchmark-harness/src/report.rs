@@ -3,6 +3,7 @@
 
 use crate::engine::{self, Engine};
 use crate::score;
+use crate::sf1;
 use crate::{DiffArgs, RunArgs};
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -14,6 +15,11 @@ use std::path::{Path, PathBuf};
 pub struct FixtureResult {
     pub name: String,
     pub tf1: Option<f64>,
+    pub sf1: Option<f64>,
+    pub sf1_precision: Option<f64>,
+    pub sf1_recall: Option<f64>,
+    pub order_score: Option<f64>,
+    pub matched_blocks: Option<usize>,
     pub duration_ms: Option<u128>,
     pub error: Option<String>,
 }
@@ -25,6 +31,10 @@ pub struct Aggregate {
     pub tf1_mean: f64,
     pub tf1_p50: f64,
     pub tf1_p90: f64,
+    pub sf1_mean: f64,
+    pub sf1_p50: f64,
+    pub sf1_p90: f64,
+    pub order_mean: f64,
     pub duration_ms_total: u128,
 }
 
@@ -90,14 +100,26 @@ fn score_one(engine: &dyn Engine, pdf: &Path, gt_path: &Path) -> FixtureResult {
                     return FixtureResult {
                         name,
                         tf1: None,
+                        sf1: None,
+                        sf1_precision: None,
+                        sf1_recall: None,
+                        order_score: None,
+                        matched_blocks: None,
                         duration_ms: Some(ext.duration.as_millis()),
                         error: Some(format!("ground-truth read: {e}")),
                     };
                 },
             };
+            let tf1 = score::tf1(&ext.markdown, &gt);
+            let s = sf1::sf1(&ext.markdown, &gt);
             FixtureResult {
                 name,
-                tf1: Some(score::tf1(&ext.markdown, &gt)),
+                tf1: Some(tf1),
+                sf1: Some(s.sf1),
+                sf1_precision: Some(s.precision),
+                sf1_recall: Some(s.recall),
+                order_score: Some(s.order_score),
+                matched_blocks: Some(s.matched),
                 duration_ms: Some(ext.duration.as_millis()),
                 error: None,
             }
@@ -105,6 +127,11 @@ fn score_one(engine: &dyn Engine, pdf: &Path, gt_path: &Path) -> FixtureResult {
         Err(e) => FixtureResult {
             name,
             tf1: None,
+            sf1: None,
+            sf1_precision: None,
+            sf1_recall: None,
+            order_score: None,
+            matched_blocks: None,
             duration_ms: None,
             error: Some(e.to_string()),
         },
@@ -112,27 +139,38 @@ fn score_one(engine: &dyn Engine, pdf: &Path, gt_path: &Path) -> FixtureResult {
 }
 
 fn aggregate(rs: &[FixtureResult]) -> Aggregate {
-    let mut tf1s: Vec<f64> = rs.iter().filter_map(|r| r.tf1).collect();
-    tf1s.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    let mean = if tf1s.is_empty() {
-        0.0
-    } else {
-        tf1s.iter().sum::<f64>() / tf1s.len() as f64
-    };
-    let p = |q: f64| -> f64 {
-        if tf1s.is_empty() {
+    let pct = |v: &[f64], q: f64| -> f64 {
+        if v.is_empty() {
             0.0
         } else {
-            let idx = ((tf1s.len() as f64 - 1.0) * q).round() as usize;
-            tf1s[idx.min(tf1s.len() - 1)]
+            let idx = ((v.len() as f64 - 1.0) * q).round() as usize;
+            v[idx.min(v.len() - 1)]
         }
     };
+    let mean_of = |v: &[f64]| -> f64 {
+        if v.is_empty() {
+            0.0
+        } else {
+            v.iter().sum::<f64>() / v.len() as f64
+        }
+    };
+
+    let mut tf1s: Vec<f64> = rs.iter().filter_map(|r| r.tf1).collect();
+    tf1s.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mut sf1s: Vec<f64> = rs.iter().filter_map(|r| r.sf1).collect();
+    sf1s.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let orders: Vec<f64> = rs.iter().filter_map(|r| r.order_score).collect();
+
     Aggregate {
         count: rs.len(),
         ok: tf1s.len(),
-        tf1_mean: mean,
-        tf1_p50: p(0.50),
-        tf1_p90: p(0.10), // lower-tail quality percentile
+        tf1_mean: mean_of(&tf1s),
+        tf1_p50: pct(&tf1s, 0.50),
+        tf1_p90: pct(&tf1s, 0.10), // lower-tail quality percentile
+        sf1_mean: mean_of(&sf1s),
+        sf1_p50: pct(&sf1s, 0.50),
+        sf1_p90: pct(&sf1s, 0.10),
+        order_mean: mean_of(&orders),
         duration_ms_total: rs.iter().filter_map(|r| r.duration_ms).sum(),
     }
 }
@@ -176,10 +214,22 @@ pub fn diff(args: DiffArgs) -> Result<()> {
 
     println!("engine={} corpus={}", base.engine, base.corpus.display());
     println!(
-        "mean TF1  base={:.3}  head={:.3}  Δ={:+.3}pp",
+        "mean TF1     base={:.3}  head={:.3}  Δ={:+.3}pp",
         base.aggregate.tf1_mean,
         head.aggregate.tf1_mean,
         (head.aggregate.tf1_mean - base.aggregate.tf1_mean) * 100.0,
+    );
+    println!(
+        "mean SF1     base={:.3}  head={:.3}  Δ={:+.3}pp",
+        base.aggregate.sf1_mean,
+        head.aggregate.sf1_mean,
+        (head.aggregate.sf1_mean - base.aggregate.sf1_mean) * 100.0,
+    );
+    println!(
+        "mean order   base={:.3}  head={:.3}  Δ={:+.3}pp",
+        base.aggregate.order_mean,
+        head.aggregate.order_mean,
+        (head.aggregate.order_mean - base.aggregate.order_mean) * 100.0,
     );
 
     let base_map: BTreeMap<&str, &FixtureResult> =
