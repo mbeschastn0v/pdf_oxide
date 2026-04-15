@@ -8,6 +8,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
+mod consensus;
 mod engine;
 mod report;
 mod score;
@@ -29,40 +30,52 @@ enum Cmd {
 }
 
 #[derive(Parser)]
-struct RunArgs {
+pub struct RunArgs {
     /// Engine to benchmark.
     #[arg(long, value_enum)]
-    engine: engine::EngineKind,
+    pub engine: engine::EngineKind,
 
     /// Directory containing PDFs to extract.
     #[arg(long)]
-    corpus: PathBuf,
+    pub corpus: PathBuf,
 
     /// Directory of ground-truth markdown files, matched by stem.
-    #[arg(long)]
-    ground_truth: PathBuf,
+    /// If omitted, `--consensus-peers` must be set to generate a
+    /// pseudo-reference from peer engines.
+    #[arg(long, required_unless_present = "consensus_peers")]
+    pub ground_truth: Option<PathBuf>,
+
+    /// Comma-separated list of peer engines whose intersection is
+    /// used as pseudo-ground-truth. Example: `--consensus-peers
+    /// pdftotext,pdfium`. Scoring labels `reference=consensus`.
+    #[arg(long, value_delimiter = ',')]
+    pub consensus_peers: Vec<engine::EngineKind>,
+
+    /// Minimum peer agreement count when `--consensus-peers` is set.
+    #[arg(long, default_value_t = 2)]
+    pub consensus_min_agree: usize,
 
     /// Output JSON report path.
     #[arg(long)]
-    output: PathBuf,
+    pub output: PathBuf,
 
     /// Seconds before an individual extraction is aborted (0 = no limit).
     #[arg(long, default_value_t = 60)]
-    timeout_secs: u64,
+    pub timeout_secs: u64,
 }
 
 #[derive(Parser)]
-struct DiffArgs {
-    base: PathBuf,
-    head: PathBuf,
+pub struct DiffArgs {
+    pub base: PathBuf,
+    pub head: PathBuf,
 
     /// Fail if mean TF1 drops by more than this (percentage points).
     #[arg(long, default_value_t = 0.5)]
-    mean_tf1_drop_pp: f64,
+    pub mean_tf1_drop_pp: f64,
 
     /// Fail if any fixture's TF1 drops by more than this (pp).
     #[arg(long, default_value_t = 5.0)]
-    per_fixture_tf1_drop_pp: f64,
+    pub per_fixture_tf1_drop_pp: f64,
 }
 
 fn main() -> Result<()> {

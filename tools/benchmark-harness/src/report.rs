@@ -1,6 +1,7 @@
 //! Run-and-diff: drive engines across a corpus, emit a JSON report,
 //! compare two reports and gate on regression.
 
+use crate::consensus;
 use crate::engine::{self, Engine};
 use crate::score;
 use crate::sf1;
@@ -42,52 +43,79 @@ pub struct Aggregate {
 pub struct Report {
     pub engine: String,
     pub corpus: PathBuf,
-    pub ground_truth: PathBuf,
+    /// `manual` when scored against a ground-truth directory; the
+    /// comma-joined list of peer engine names when scored against a
+    /// consensus baseline. Stored in the report so downstream readers
+    /// never confuse absolute quality with inter-engine agreement.
+    pub reference: String,
+    pub ground_truth: Option<PathBuf>,
     pub fixtures: Vec<FixtureResult>,
     pub aggregate: Aggregate,
 }
 
 pub fn run(args: RunArgs) -> Result<()> {
-    let engine = engine::build(args.engine);
+    let engine = engine::build(args.engine)?;
     log::info!("engine = {}", engine.name());
 
-    let pairs = collect_pairs(&args.corpus, &args.ground_truth)?;
-    if pairs.is_empty() {
-        return Err(anyhow!(
-            "no PDF/markdown pairs found — expected matching *.pdf under {} \
-             and *.md under {}",
-            args.corpus.display(),
-            args.ground_truth.display()
-        ));
-    }
-    log::info!("found {} fixture pairs", pairs.len());
-
-    let mut fixtures = Vec::with_capacity(pairs.len());
-    for (i, (pdf, gt_path)) in pairs.iter().enumerate() {
-        log::info!("[{}/{}] {}", i + 1, pairs.len(), pdf.display());
-        fixtures.push(score_one(&*engine, pdf, gt_path));
-    }
+    let (fixtures, reference) = if let Some(gt_dir) = &args.ground_truth {
+        let pairs = collect_pairs(&args.corpus, gt_dir)?;
+        if pairs.is_empty() {
+            return Err(anyhow!(
+                "no PDF/markdown pairs found — expected matching *.pdf under {} \
+                 and *.md under {}",
+                args.corpus.display(),
+                gt_dir.display()
+            ));
+        }
+        log::info!("found {} fixture pairs (manual ground truth)", pairs.len());
+        let mut fixtures = Vec::with_capacity(pairs.len());
+        for (i, (pdf, gt_path)) in pairs.iter().enumerate() {
+            log::info!("[{}/{}] {}", i + 1, pairs.len(), pdf.display());
+            fixtures.push(score_one_manual(&*engine, pdf, gt_path));
+        }
+        (fixtures, "manual".to_string())
+    } else {
+        // Consensus mode: peers provide pseudo-ground-truth.
+        let peers: Vec<Box<dyn Engine>> = args
+            .consensus_peers
+            .iter()
+            .map(|k| engine::build(*k))
+            .collect::<Result<Vec<_>>>()?;
+        let peer_names: Vec<&str> = peers.iter().map(|p| p.name()).collect();
+        let reference = format!("consensus({})", peer_names.join(","));
+        log::info!("consensus mode — peers: {}", peer_names.join(", "));
+        let pdfs = collect_pdfs(&args.corpus)?;
+        let mut fixtures = Vec::with_capacity(pdfs.len());
+        for (i, pdf) in pdfs.iter().enumerate() {
+            log::info!("[{}/{}] {}", i + 1, pdfs.len(), pdf.display());
+            fixtures.push(score_one_consensus(&*engine, pdf, &peers, args.consensus_min_agree));
+        }
+        (fixtures, reference)
+    };
 
     let aggregate = aggregate(&fixtures);
     let report = Report {
         engine: engine.name().to_string(),
         corpus: args.corpus,
+        reference,
         ground_truth: args.ground_truth,
         fixtures,
         aggregate,
     };
     fs::write(&args.output, serde_json::to_vec_pretty(&report)?)?;
     log::info!(
-        "wrote {} — mean TF1 {:.3} across {} fixtures ({} ok)",
+        "wrote {} — mean TF1 {:.3} / SF1 {:.3} across {} fixtures ({} ok), reference={}",
         args.output.display(),
         report.aggregate.tf1_mean,
+        report.aggregate.sf1_mean,
         report.aggregate.count,
-        report.aggregate.ok
+        report.aggregate.ok,
+        report.reference,
     );
     Ok(())
 }
 
-fn score_one(engine: &dyn Engine, pdf: &Path, gt_path: &Path) -> FixtureResult {
+fn score_one_manual(engine: &dyn Engine, pdf: &Path, gt_path: &Path) -> FixtureResult {
     let name = pdf
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
@@ -173,6 +201,85 @@ fn aggregate(rs: &[FixtureResult]) -> Aggregate {
         order_mean: mean_of(&orders),
         duration_ms_total: rs.iter().filter_map(|r| r.duration_ms).sum(),
     }
+}
+
+fn score_one_consensus(
+    engine: &dyn Engine,
+    pdf: &Path,
+    peers: &[Box<dyn Engine>],
+    min_agree: usize,
+) -> FixtureResult {
+    let name = pdf
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    match engine.extract(pdf) {
+        Ok(ext) => {
+            let tf1 = consensus::consensus_tf1(pdf, peers, &ext.markdown, min_agree);
+            match tf1 {
+                Ok(Some(v)) => FixtureResult {
+                    name,
+                    tf1: Some(v),
+                    // SF1 needs markdown from peers as a block stream, not
+                    // a token set; consensus mode skips it for now so the
+                    // numbers aren't misleadingly "0.0 means bad structure".
+                    sf1: None,
+                    sf1_precision: None,
+                    sf1_recall: None,
+                    order_score: None,
+                    matched_blocks: None,
+                    duration_ms: Some(ext.duration.as_millis()),
+                    error: None,
+                },
+                Ok(None) => FixtureResult {
+                    name,
+                    tf1: None,
+                    sf1: None,
+                    sf1_precision: None,
+                    sf1_recall: None,
+                    order_score: None,
+                    matched_blocks: None,
+                    duration_ms: Some(ext.duration.as_millis()),
+                    error: Some(format!(
+                        "consensus unavailable: fewer than {min_agree} peers succeeded"
+                    )),
+                },
+                Err(e) => FixtureResult {
+                    name,
+                    tf1: None,
+                    sf1: None,
+                    sf1_precision: None,
+                    sf1_recall: None,
+                    order_score: None,
+                    matched_blocks: None,
+                    duration_ms: Some(ext.duration.as_millis()),
+                    error: Some(e.to_string()),
+                },
+            }
+        },
+        Err(e) => FixtureResult {
+            name,
+            tf1: None,
+            sf1: None,
+            sf1_precision: None,
+            sf1_recall: None,
+            order_score: None,
+            matched_blocks: None,
+            duration_ms: None,
+            error: Some(e.to_string()),
+        },
+    }
+}
+
+fn collect_pdfs(corpus: &Path) -> Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    for entry in walkdir::WalkDir::new(corpus) {
+        let entry = entry.with_context(|| format!("walk {}", corpus.display()))?;
+        if entry.file_type().is_file() && entry.path().extension().is_some_and(|e| e == "pdf") {
+            out.push(entry.path().to_path_buf());
+        }
+    }
+    Ok(out)
 }
 
 /// Match by file stem: `foo.pdf` ↔ `foo.md`.

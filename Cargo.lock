@@ -392,6 +392,7 @@ dependencies = [
  "env_logger",
  "log",
  "pdf_oxide",
+ "pdfium-render 0.8.37",
  "pulldown-cmark",
  "rayon",
  "serde",
@@ -2585,7 +2586,7 @@ dependencies = [
  "ndarray 0.17.2",
  "nom 8.0.0",
  "ort",
- "pdfium-render",
+ "pdfium-render 0.9.0",
  "phf",
  "pkcs1",
  "pkcs8",
@@ -2642,6 +2643,32 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "pdfium-render"
+version = "0.8.37"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6553f6604a52b3203db7b4e9d51eb4dd193cf455af9e56d40cab6575b547b679"
+dependencies = [
+ "bitflags 2.11.1",
+ "bytemuck",
+ "bytes",
+ "chrono",
+ "console_error_panic_hook",
+ "console_log",
+ "image 0.25.10",
+ "itertools 0.14.0",
+ "js-sys",
+ "libloading",
+ "log",
+ "maybe-owned",
+ "once_cell",
+ "utf16string",
+ "vecmath",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
