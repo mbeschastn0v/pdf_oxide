@@ -17,7 +17,7 @@ UPSTREAM_URL="https://github.com/Goldziher/kreuzberg.git"
 # Pin so scoring numbers don't drift with upstream fixture churn.
 UPSTREAM_REF="${KREUZBERG_REF:-main}"
 
-mkdir -p "${DEST}" "$(dirname "${UPSTREAM_DIR}")"
+mkdir -p "$(dirname "${DEST}")" "$(dirname "${UPSTREAM_DIR}")"
 
 if [[ ! -d "${UPSTREAM_DIR}/.git" ]]; then
   echo "cloning ${UPSTREAM_URL} → ${UPSTREAM_DIR}"
@@ -28,21 +28,34 @@ else
   git -C "${UPSTREAM_DIR}" checkout "${UPSTREAM_REF}"
 fi
 
-# Kreuzberg fixtures live under tools/benchmark-harness/fixtures/
-# with parallel *.pdf and *.md files. Symlink so we don't duplicate
-# hundreds of MB in our repo, and so re-running this script with a
-# different UPSTREAM_REF works in place.
-SRC="${UPSTREAM_DIR}/tools/benchmark-harness/fixtures"
-if [[ ! -d "${SRC}" ]]; then
-  echo "error: ${SRC} not found — upstream layout changed?" >&2
+# Kreuzberg keeps PDFs under test_documents/pdf and ground-truth
+# markdown under test_documents/ground_truth/pdf. We flatten this into
+# one directory of symlinks so the harness's stem-matching loader
+# (foo.pdf ↔ foo.md) just works.
+PDF_SRC="${UPSTREAM_DIR}/test_documents/pdf"
+GT_SRC="${UPSTREAM_DIR}/test_documents/ground_truth/pdf"
+if [[ ! -d "${PDF_SRC}" || ! -d "${GT_SRC}" ]]; then
+  echo "error: expected ${PDF_SRC} and ${GT_SRC} — upstream layout changed?" >&2
   exit 1
 fi
 
-rm -f "${DEST}"
-ln -s "${SRC}" "${DEST}"
+rm -rf "${DEST}"
+mkdir -p "${DEST}/pdfs" "${DEST}/gt"
 
-printf 'linked %s → %s\n' "${DEST}" "${SRC}"
-printf 'fixture count (pdf): %d\n' \
-  "$(find -L "${DEST}" -type f -name '*.pdf' | wc -l)"
-printf 'ground-truth count (md): %d\n' \
-  "$(find -L "${DEST}" -type f -name '*.md' | wc -l)"
+# Use absolute targets so the symlinks resolve regardless of cwd.
+PDF_SRC_ABS=$(cd "${PDF_SRC}" && pwd)
+GT_SRC_ABS=$(cd "${GT_SRC}" && pwd)
+
+for f in "${PDF_SRC_ABS}"/*.pdf; do
+  [[ -f "$f" ]] || continue
+  ln -sf "$f" "${DEST}/pdfs/$(basename "$f")"
+done
+for f in "${GT_SRC_ABS}"/*.md; do
+  [[ -f "$f" ]] || continue
+  ln -sf "$f" "${DEST}/gt/$(basename "$f")"
+done
+
+printf 'pdfs: %d\n'  "$(find -L "${DEST}/pdfs" -type f -name '*.pdf' | wc -l)"
+printf 'gt:   %d\n' "$(find -L "${DEST}/gt"   -type f -name '*.md'  | wc -l)"
+printf 'corpus at: %s\n' "${DEST}/pdfs"
+printf 'gt dir at: %s\n' "${DEST}/gt"

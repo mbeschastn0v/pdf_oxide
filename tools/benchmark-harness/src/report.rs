@@ -273,7 +273,7 @@ fn score_one_consensus(
 
 fn collect_pdfs(corpus: &Path) -> Result<Vec<PathBuf>> {
     let mut out = Vec::new();
-    for entry in walkdir::WalkDir::new(corpus) {
+    for entry in walkdir::WalkDir::new(corpus).follow_links(true) {
         let entry = entry.with_context(|| format!("walk {}", corpus.display()))?;
         if entry.file_type().is_file() && entry.path().extension().is_some_and(|e| e == "pdf") {
             out.push(entry.path().to_path_buf());
@@ -285,7 +285,7 @@ fn collect_pdfs(corpus: &Path) -> Result<Vec<PathBuf>> {
 /// Match by file stem: `foo.pdf` ↔ `foo.md`.
 fn collect_pairs(corpus: &Path, gt: &Path) -> Result<Vec<(PathBuf, PathBuf)>> {
     let mut gt_map: BTreeMap<String, PathBuf> = BTreeMap::new();
-    for entry in walkdir::WalkDir::new(gt) {
+    for entry in walkdir::WalkDir::new(gt).follow_links(true) {
         let entry = entry.with_context(|| format!("walk {}", gt.display()))?;
         if entry.file_type().is_file() && entry.path().extension().is_some_and(|e| e == "md") {
             let stem = entry
@@ -298,7 +298,7 @@ fn collect_pairs(corpus: &Path, gt: &Path) -> Result<Vec<(PathBuf, PathBuf)>> {
         }
     }
     let mut out = Vec::new();
-    for entry in walkdir::WalkDir::new(corpus) {
+    for entry in walkdir::WalkDir::new(corpus).follow_links(true) {
         let entry = entry.with_context(|| format!("walk {}", corpus.display()))?;
         if entry.file_type().is_file() && entry.path().extension().is_some_and(|e| e == "pdf") {
             let stem = entry

@@ -9,8 +9,8 @@
 # Defaults override on the command line, e.g.
 #   make benchmark-run ENGINE=pdftotext CORPUS=/path/to/pdfs OUTPUT=head.json
 ENGINE ?= pdf_oxide
-CORPUS ?= tools/benchmark-harness/fixtures/kreuzberg
-GROUND_TRUTH ?= $(CORPUS)
+CORPUS ?= tools/benchmark-harness/fixtures/kreuzberg/pdfs
+GROUND_TRUTH ?= tools/benchmark-harness/fixtures/kreuzberg/gt
 OUTPUT ?= target/benchmark.json
 BASE ?= base.json
 HEAD ?= head.json
