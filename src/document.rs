@@ -6236,13 +6236,43 @@ impl PdfDocument {
             });
         }
 
-        // Row-aware reading order: Y-band descending (top→bottom), X
-        // ascending within a row.
-        spans.sort_by(|a, b| {
-            crate::utils::row_aware_span_cmp(a.bbox.y, a.bbox.x, b.bbox.y, b.bbox.x)
-        });
-        // Lift multi-row-spanning labels to the top of their block.
-        Self::reorder_rowspan_labels(&mut spans);
+        // Reading order: XY-cut when the page has multiple columns (B4);
+        // otherwise the cheap row-aware sort. XY-cut is spatial recursion
+        // that correctly orders multi-column layouts (newspapers, academic
+        // papers, dashboards) but is overkill for single-column pages and
+        // doesn't handle tabular rowspan labels specifically. Heuristic:
+        // count distinct X-center clusters with vertical overlap; ≥2
+        // clusters → multi-column.
+        if Self::is_multi_column_page(&spans) {
+            use crate::pipeline::reading_order::{
+                ReadingOrderContext as ROContext, ReadingOrderStrategy, XYCutStrategy,
+            };
+            let strategy = XYCutStrategy::new();
+            let context = ROContext::new().with_page(page_index as u32);
+            match strategy.apply(spans.clone(), &context) {
+                Ok(ordered) => {
+                    spans = ordered.into_iter().map(|o| o.span).collect();
+                },
+                Err(e) => {
+                    log::debug!(
+                        "XY-cut reading order failed on page {page_index} ({e}), \
+                         falling back to row-aware sort"
+                    );
+                    spans.sort_by(|a, b| {
+                        crate::utils::row_aware_span_cmp(a.bbox.y, a.bbox.x, b.bbox.y, b.bbox.x)
+                    });
+                    Self::reorder_rowspan_labels(&mut spans);
+                },
+            }
+        } else {
+            // Row-aware sort: Y-band descending (top→bottom), X ascending
+            // within a row.
+            spans.sort_by(|a, b| {
+                crate::utils::row_aware_span_cmp(a.bbox.y, a.bbox.x, b.bbox.y, b.bbox.x)
+            });
+            // Lift multi-row-spanning labels to the top of their block.
+            Self::reorder_rowspan_labels(&mut spans);
+        }
 
         // Filter out spans in erase regions
         if let Some(regions) = self.erase_regions.get(&page_index) {
@@ -6256,6 +6286,111 @@ impl PdfDocument {
         self.mark_running_artifact_spans(page_index, &mut spans)?;
 
         Ok(spans)
+    }
+
+    /// Heuristic: does this page have two or more vertical text columns?
+    ///
+    /// Used by `extract_spans` to decide whether to pay the XY-cut cost
+    /// (correct but slower on large pages) or stick with the cheap row-
+    /// aware sort. The check bins span X-centers into a small histogram
+    /// and looks for two dense bands separated by a gutter whose spans
+    /// vertically overlap with each other — that's the defining shape
+    /// of a multi-column layout (newspaper / academic / dashboard) as
+    /// opposed to sparse side-notes that flank a single column.
+    ///
+    /// False negatives (missed multi-column page) just mean we use the
+    /// old reading order. False positives (single column routed through
+    /// XY-cut) cost a bit of CPU but produce the same or better result.
+    /// Both sides degrade gracefully.
+    fn is_multi_column_page(spans: &[crate::layout::TextSpan]) -> bool {
+        if spans.len() < 12 {
+            return false; // too few to confidently split into columns
+        }
+
+        let mut x_centers: Vec<f32> = spans
+            .iter()
+            .map(|s| s.bbox.x + s.bbox.width * 0.5)
+            .collect();
+        x_centers.sort_by(|a, b| crate::utils::safe_float_cmp(*a, *b));
+
+        // Degenerate CTM guard: drop centers more than MAX_EXTENT from the
+        // median so a rogue span ~1e16 doesn't explode the histogram.
+        const MAX_EXTENT_FROM_MEDIAN: f32 = 5_000.0;
+        let median = x_centers[x_centers.len() / 2];
+        x_centers.retain(|c| (*c - median).abs() <= MAX_EXTENT_FROM_MEDIAN);
+        if x_centers.len() < 12 {
+            return false;
+        }
+
+        let min = *x_centers.first().unwrap();
+        let max = *x_centers.last().unwrap();
+        let width = max - min;
+        if width < 100.0 {
+            return false; // spans cluster in a single vertical line — not columns
+        }
+
+        // Bin into 40 buckets; find peaks (> mean + stddev) separated by
+        // at least one low-density bucket.
+        const BUCKETS: usize = 40;
+        let bucket_width = width / BUCKETS as f32;
+        if bucket_width <= 0.0 {
+            return false;
+        }
+        let mut hist = [0usize; BUCKETS];
+        for c in &x_centers {
+            let idx = (((c - min) / bucket_width) as usize).min(BUCKETS - 1);
+            hist[idx] += 1;
+        }
+
+        let total: usize = hist.iter().sum();
+        let mean = total as f32 / BUCKETS as f32;
+        let threshold = (mean * 1.5).max(3.0);
+
+        let mut peaks = 0usize;
+        let mut in_peak = false;
+        for &count in &hist {
+            if count as f32 >= threshold {
+                if !in_peak {
+                    peaks += 1;
+                    in_peak = true;
+                }
+            } else if count == 0 {
+                in_peak = false;
+            }
+        }
+
+        if peaks < 2 {
+            return false;
+        }
+
+        // Confirmation: the peaks must have vertical overlap. If one "column"
+        // is a footer and the other is the body, they don't interact — row-
+        // aware is fine. Split spans into left-half vs right-half and check
+        // their Y ranges overlap.
+        let mid_x = (min + max) / 2.0;
+        let mut left_y_min = f32::INFINITY;
+        let mut left_y_max = f32::NEG_INFINITY;
+        let mut right_y_min = f32::INFINITY;
+        let mut right_y_max = f32::NEG_INFINITY;
+        for s in spans {
+            let cx = s.bbox.x + s.bbox.width * 0.5;
+            if (cx - median).abs() > MAX_EXTENT_FROM_MEDIAN {
+                continue;
+            }
+            let y_top = s.bbox.y + s.bbox.height;
+            if cx < mid_x {
+                left_y_min = left_y_min.min(s.bbox.y);
+                left_y_max = left_y_max.max(y_top);
+            } else {
+                right_y_min = right_y_min.min(s.bbox.y);
+                right_y_max = right_y_max.max(y_top);
+            }
+        }
+        let left_span = (left_y_max - left_y_min).max(0.0);
+        let right_span = (right_y_max - right_y_min).max(0.0);
+        let overlap = left_y_max.min(right_y_max) - left_y_min.max(right_y_min);
+        let min_span = left_span.min(right_span);
+        min_span > 0.0 && overlap > 0.5 * min_span
     }
 
     /// Normalize a span's text for cross-page signature matching.

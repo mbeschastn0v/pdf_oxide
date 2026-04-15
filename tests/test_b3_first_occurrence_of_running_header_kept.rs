@@ -32,34 +32,21 @@ fn running_header_pdf() -> Vec<u8> {
 
     // 1 Catalog, 2 Pages, 3/4/5 Page objects, 6/7/8 content streams, 9 Font
     push(&mut out, &mut offsets, "<< /Type /Catalog /Pages 2 0 R >>");
-    push(
-        &mut out,
-        &mut offsets,
-        "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >>",
-    );
+    push(&mut out, &mut offsets, "<< /Type /Pages /Kids [3 0 R 4 0 R 5 0 R] /Count 3 >>");
     let page_common = "/Type /Page /Parent 2 0 R /MediaBox [0 0 600 900] \
                        /Resources << /Font << /F0 9 0 R >> >>";
-    push(
-        &mut out,
-        &mut offsets,
-        &format!("<< {page_common} /Contents 6 0 R >>"),
-    );
-    push(
-        &mut out,
-        &mut offsets,
-        &format!("<< {page_common} /Contents 7 0 R >>"),
-    );
-    push(
-        &mut out,
-        &mut offsets,
-        &format!("<< {page_common} /Contents 8 0 R >>"),
-    );
+    push(&mut out, &mut offsets, &format!("<< {page_common} /Contents 6 0 R >>"));
+    push(&mut out, &mut offsets, &format!("<< {page_common} /Contents 7 0 R >>"));
+    push(&mut out, &mut offsets, &format!("<< {page_common} /Contents 8 0 R >>"));
 
     // Each page: header "Universal Title" at Y=860 (in the top 12% band
     // of a 900pt page: band is > 792) + unique body text at Y=400.
     let header_y = 860;
     let body_y = 400;
-    for (idx, body) in ["PageOneBody", "PageTwoBody", "PageThreeBody"].iter().enumerate() {
+    for (idx, body) in ["PageOneBody", "PageTwoBody", "PageThreeBody"]
+        .iter()
+        .enumerate()
+    {
         let stream = format!(
             "BT /F0 14 Tf 50 {header_y} Td (Universal Title) Tj ET \
              BT /F0 12 Tf 50 {body_y} Td ({body}) Tj ET\n"
@@ -68,18 +55,11 @@ fn running_header_pdf() -> Vec<u8> {
         push(
             &mut out,
             &mut offsets,
-            &format!(
-                "<< /Length {} >>\nstream\n{stream}\nendstream",
-                stream.len() + 1
-            ),
+            &format!("<< /Length {} >>\nstream\n{stream}\nendstream", stream.len() + 1),
         );
     }
 
-    push(
-        &mut out,
-        &mut offsets,
-        "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-    );
+    push(&mut out, &mut offsets, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>");
 
     let xref_offset = out.len();
     out.extend_from_slice(format!("xref\n0 {}\n", offsets.len()).as_bytes());
