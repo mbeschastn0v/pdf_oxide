@@ -575,6 +575,47 @@ pub fn detect_tables_from_spans(spans: &[TextSpan], config: &TableDetectionConfi
         }
     }
 
+    // Borderless numeric lattice (ML / results tables). When the column gap
+    // is below `column_merge_threshold`, greedy clustering fuses a dense grid
+    // of short numeric cells laid out on a regular ~20pt pitch, so two values
+    // share one cell ("0.69 0.76"). The text-edge detector keeps only X edges
+    // that recur across >=3 rows, which on a numeric lattice recovers every
+    // column. Prefer it when the spans are predominantly numeric and it splits
+    // a coarser greedy set into more (still bounded) columns. The numeric-
+    // predominance gate keeps prose / label-value tables (e.g. Google-Docs
+    // exports) on the greedy path untouched.
+    let numeric_spans = spans
+        .iter()
+        .filter(|s| is_numeric_cell(s.text.trim()))
+        .count();
+    if numeric_spans >= 10 && columns.len() <= config.max_table_columns {
+        let te_columns = detect_text_edge_columns(spans, config);
+        if te_columns.len() > columns.len()
+            && te_columns.len() >= 5
+            && te_columns.len() <= config.max_table_columns
+            && is_regular_lattice(&te_columns)
+        {
+            // Adopt the finer lattice ONLY when it still forms a fully valid
+            // grid. A sparse split that fails the quality gate would otherwise
+            // drop the whole table to prose — worse than the merged-column
+            // baseline. Probing here means the refinement can only refine a
+            // table that stays valid, never demote one.
+            let probe_rows = detect_rows(spans, config.row_tolerance);
+            if probe_rows.len() >= 2 {
+                let probe_grid = assign_spans_to_cells(spans, &te_columns, &probe_rows);
+                if validate_table_structure_internal(&probe_grid, config) {
+                    let probe_table = grid_to_table(&probe_grid, spans, None);
+                    if is_valid_table(&probe_table)
+                        && passes_spatial_quality_gate(&probe_table)
+                        && !looks_like_prose_paragraph(&probe_table)
+                    {
+                        columns = te_columns;
+                    }
+                }
+            }
+        }
+    }
+
     if columns.len() < config.min_table_columns.max(2) || columns.len() > config.max_table_columns {
         return Vec::new();
     }
@@ -863,6 +904,51 @@ fn detect_columns(
 ///
 /// The resulting columns are fewer and more faithful to the visual grid of
 /// forms that have no vector lines.
+/// A short numeric cell: optional sign, digits with an optional single decimal
+/// point, optional trailing `%`. Accepts `0.69`, `100`, `-1.2`, `52%`; rejects
+/// words and identifiers. Used to recognise a borderless data grid.
+fn is_numeric_cell(t: &str) -> bool {
+    if t.is_empty() || t.len() > 8 {
+        return false;
+    }
+    let t = t.strip_suffix('%').unwrap_or(t);
+    let t = t.strip_prefix(['+', '-', '\u{2212}']).unwrap_or(t);
+    let mut seen_dot = false;
+    let mut seen_digit = false;
+    for c in t.chars() {
+        match c {
+            '0'..='9' => seen_digit = true,
+            '.' if !seen_dot => seen_dot = true,
+            _ => return false,
+        }
+    }
+    seen_digit
+}
+
+/// True when the column centres sit on a near-constant pitch — the signature of
+/// a numeric data lattice rather than prose that happened to align. Requires
+/// ≥5 columns and tolerates up to two off-pitch gaps (e.g. a wider row-label
+/// column at the left edge).
+fn is_regular_lattice(cols: &[ColumnCluster]) -> bool {
+    if cols.len() < 5 {
+        return false;
+    }
+    let mut centers: Vec<f32> = cols.iter().map(|c| c.x_center).collect();
+    centers.sort_by(|a, b| crate::utils::safe_float_cmp(*a, *b));
+    let gaps: Vec<f32> = centers.windows(2).map(|w| w[1] - w[0]).collect();
+    let mut sorted = gaps.clone();
+    sorted.sort_by(|a, b| crate::utils::safe_float_cmp(*a, *b));
+    let median = sorted[sorted.len() / 2];
+    if median <= 0.0 {
+        return false;
+    }
+    let on_pitch = gaps
+        .iter()
+        .filter(|&&g| g >= median * 0.6 && g <= median * 1.6)
+        .count();
+    on_pitch + 2 >= gaps.len()
+}
+
 fn detect_text_edge_columns(
     spans: &[TextSpan],
     config: &TableDetectionConfig,
@@ -3633,6 +3719,55 @@ mod tests {
     use crate::geometry::Rect;
     use crate::layout::text_block::{Color, FontWeight};
 
+    #[test]
+    fn test_is_numeric_cell() {
+        for ok in ["0.69", "100", "-1.2", "52%", "0", "1.00", "\u{2212}3.5"] {
+            assert!(is_numeric_cell(ok), "{ok:?} should be numeric");
+        }
+        for no in [
+            "Ours",
+            "GLUE",
+            "v3",
+            "1e9",
+            "0.6.6",
+            "",
+            "12345678.9",
+            "p<0.05",
+        ] {
+            assert!(!is_numeric_cell(no), "{no:?} should NOT be numeric");
+        }
+    }
+
+    fn col_at(x: f32) -> ColumnCluster {
+        ColumnCluster {
+            x_center: x,
+            x_min: x - 3.0,
+            x_max: x + 3.0,
+            span_indices: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_is_regular_lattice() {
+        // Regular ~20pt pitch with one wider row-label gap on the left.
+        let regular: Vec<ColumnCluster> = [113.0, 150.0, 170.0, 190.0, 210.0, 230.0]
+            .iter()
+            .map(|&x| col_at(x))
+            .collect();
+        assert!(is_regular_lattice(&regular));
+
+        // Fewer than 5 columns → not a lattice.
+        let small: Vec<ColumnCluster> = [100.0, 200.0, 300.0].iter().map(|&x| col_at(x)).collect();
+        assert!(!is_regular_lattice(&small));
+
+        // Irregular gaps (prose that happened to align) → rejected.
+        let irregular: Vec<ColumnCluster> = [100.0, 140.0, 320.0, 330.0, 500.0, 505.0]
+            .iter()
+            .map(|&x| col_at(x))
+            .collect();
+        assert!(!is_regular_lattice(&irregular));
+    }
+
     fn prose_cell(text: &str) -> TableCell {
         TableCell {
             text: text.to_string(),
@@ -3734,6 +3869,7 @@ mod tests {
             primary_detected: false,
             char_widths: vec![],
             heading_level: None,
+            rotation_degrees: 0.0,
         }
     }
     fn make_h_line(x: f32, y: f32, width: f32) -> crate::elements::PathContent {
@@ -6079,6 +6215,7 @@ mod tests {
             primary_detected: false,
             char_widths: vec![],
             heading_level: None,
+            rotation_degrees: 0.0,
         }
     }
 

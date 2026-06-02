@@ -274,13 +274,14 @@ impl PyPdfDocument {
     ///     full text assembly pipeline is used (structure-tree ordering, table
     ///     detection, column detection) — excluded content is simply removed
     ///     before assembly.
-    #[pyo3(signature = (page, region=None, exclude_layers=None, exclude_inks=None))]
+    #[pyo3(signature = (page, region=None, exclude_layers=None, exclude_inks=None, extract_tables=true))]
     fn extract_text(
         &mut self,
         page: usize,
         region: Option<(f32, f32, f32, f32)>,
         exclude_layers: Option<Vec<String>>,
         exclude_inks: Option<Vec<String>>,
+        extract_tables: bool,
     ) -> PyResult<String> {
         let has_filters = exclude_layers.is_some() || exclude_inks.is_some();
         let layers: HashSet<String> = exclude_layers.unwrap_or_default().into_iter().collect();
@@ -316,9 +317,18 @@ impl PyPdfDocument {
                 .map_err(|e| {
                     PyRuntimeError::new_err(format!("Failed to extract filtered text: {}", e))
                 })
-        } else {
+        } else if extract_tables {
             self.inner
                 .extract_text(page)
+                .map_err(|e| PyRuntimeError::new_err(format!("Failed to extract text: {}", e)))
+        } else {
+            // Opt-out path: skip the table-detection sweep for speed.
+            let options = crate::converters::ConversionOptions {
+                extract_tables: false,
+                ..Default::default()
+            };
+            self.inner
+                .extract_text_with_options(page, &options)
                 .map_err(|e| PyRuntimeError::new_err(format!("Failed to extract text: {}", e)))
         }
     }
@@ -3102,7 +3112,7 @@ impl PyDocPage {
     fn text(&self, py: Python<'_>) -> PyResult<String> {
         self.doc
             .borrow_mut(py)
-            .extract_text(self.page_index, None, None, None)
+            .extract_text(self.page_index, None, None, None, true)
     }
 
     #[getter]
@@ -3715,7 +3725,7 @@ impl PyPdfPageRegion {
     }
     fn extract_text(&self, py: Python<'_>) -> PyResult<String> {
         let mut d = self.doc.bind(py).borrow_mut();
-        d.extract_text(self.page_index, Some(self.bbox()), None, None)
+        d.extract_text(self.page_index, Some(self.bbox()), None, None, true)
     }
     fn extract_words(&self, py: Python<'_>) -> PyResult<Vec<PyWord>> {
         let mut d = self.doc.bind(py).borrow_mut();

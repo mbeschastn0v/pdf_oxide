@@ -3180,6 +3180,7 @@ mod tests {
                 primary_detected: false,
                 char_widths: vec![],
                 heading_level: None,
+                rotation_degrees: 0.0,
             },
             0,
         )
@@ -3213,6 +3214,7 @@ mod tests {
                 primary_detected: false,
                 char_widths: vec![],
                 heading_level: None,
+                rotation_degrees: 0.0,
             },
             0,
         )
@@ -3736,6 +3738,7 @@ mod tests {
                 primary_detected: false,
                 char_widths: vec![],
                 heading_level: None,
+                rotation_degrees: 0.0,
             },
             order,
         );
@@ -4503,6 +4506,7 @@ mod tests {
             primary_detected: false,
             char_widths: vec![],
             heading_level: None,
+            rotation_degrees: 0.0,
         };
         let mut cell = TableCell::new("Critical".to_string(), false);
         cell.spans.push(bold_span.clone());
