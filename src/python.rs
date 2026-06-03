@@ -268,6 +268,13 @@ impl PyPdfDocument {
     ///     region (tuple, optional): Bounding box (x, y, width, height) to restrict extraction
     ///     exclude_layers (list[str], optional): OCG layer names to exclude from extraction
     ///     exclude_inks (list[str], optional): Separation/DeviceN ink names to exclude
+    ///     extract_tables (bool): When ``False``, skip the table-detection sweep
+    ///         for faster speed-first raw-text extraction (default ``True``).
+    ///         Applies to **whole-page** extraction only — i.e. when neither
+    ///         ``region`` nor ``exclude_layers`` / ``exclude_inks`` is given.
+    ///         The scoped (``region``) and filtered (``exclude_*``) paths run
+    ///         their normal pipeline and ignore this flag, since those surfaces
+    ///         are already scoped and lack a table-detection hot spot.
     ///
     /// Note:
     ///     When ``exclude_layers`` or ``exclude_inks`` are specified, the same
