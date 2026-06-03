@@ -14281,6 +14281,25 @@ impl PdfDocument {
             }
         }
 
+        // #05: a scanned / image page produces no extractable text and would
+        // render as a silently-blank page. Emit a visible marker so a reader
+        // knows content was lost and OCR is required, rather than dropping
+        // (on a scanned corpus) ~half the document with no explanation. Gated
+        // to genuinely scanned/image pages (not legitimately-blank ones) and
+        // suppressible via `annotate_skipped_pages`.
+        if options.annotate_skipped_pages && markdown.trim().is_empty() {
+            if let Ok(c) = self.classify_page(page_index) {
+                use crate::extractors::auto::PageKind;
+                if matches!(c.kind, PageKind::Scanned | PageKind::ImageText) {
+                    return Ok(format!(
+                        "> [OCR REQUIRED — page {}]\n> This page is a scanned/rasterised image with no \
+                         extractable text layer; run OCR to recover its content.\n",
+                        page_index + 1
+                    ));
+                }
+            }
+        }
+
         Ok(markdown)
     }
 
