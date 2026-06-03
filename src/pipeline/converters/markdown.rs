@@ -854,6 +854,13 @@ impl MarkdownOutputConverter {
         if !(2..=200).contains(&text_len) {
             return false;
         }
+        // Reject a bare ordinal suffix (`st`/`nd`/`rd`/`th`) left stranded when a
+        // superscript ordinal is split from its number ("May 5th" → "May 5" +
+        // superscript "th"). On its own it is never a heading; promoting it emits
+        // a stray "#### th" that fragments the document outline (#07).
+        if matches!(trimmed.to_ascii_lowercase().as_str(), "st" | "nd" | "rd" | "th") {
+            return false;
+        }
         // Sentence-length guards: a heading rarely exceeds 20 words and
         // almost never contains a full stop followed by more text (that's
         // a paragraph, even if it happens to be set in a larger font).
@@ -2081,6 +2088,20 @@ mod tests {
     use crate::pipeline::converters::span_in_table;
     use crate::pipeline::StructRole;
     use crate::structure::table_extractor::{TableCell, TableRow};
+
+    #[test]
+    fn test_bare_ordinal_suffix_is_not_a_heading() {
+        // #07: a stranded superscript ordinal must never be promoted to a heading.
+        for ord in ["st", "nd", "rd", "th", "ST", "Th", " th "] {
+            assert!(
+                !MarkdownOutputConverter::is_valid_heading_text(ord),
+                "{ord:?} must not be a valid heading"
+            );
+        }
+        // Real (word-leading) headings stay valid.
+        assert!(MarkdownOutputConverter::is_valid_heading_text("Spring Equinox Gathering"));
+        assert!(MarkdownOutputConverter::is_valid_heading_text("Eastern Apiary Update"));
+    }
 
     /// D1 RED — when the structure tree carries an explicit heading role
     /// for a span (Word/Acrobat style: H1 → Span → MCR resolved by D8b),
