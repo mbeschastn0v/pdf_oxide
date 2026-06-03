@@ -133,7 +133,7 @@ impl OcrOutput {
     /// fall outside the band and sort by Y, yielding a cycle. Rust's sort detects
     /// that and panics ("comparison function does not correctly implement a total
     /// order"), aborting the host process on image_text slides with a few labels
-    /// on near-identical baselines (#08). Quantising removes the relativity, so
+    /// on near-identical baselines. Quantising removes the relativity, so
     /// this is a genuine total order (integer band cmp, then the total-order
     /// `safe_float_cmp` on X then Y).
     fn reading_order_cmp(a: &[[f32; 2]; 4], b: &[[f32; 2]; 4]) -> std::cmp::Ordering {
@@ -171,7 +171,7 @@ impl OcrOutput {
     pub fn to_text_spans(&self, scale: f32) -> Vec<crate::layout::text_block::TextSpan> {
         let mut spans_with_pos: Vec<_> = self.spans.iter().enumerate().collect();
 
-        // Sort by reading order (top to bottom, left to right) — total order, #08.
+        // Sort by reading order (top to bottom, left to right) — total order.
         spans_with_pos.sort_by(|(_, a), (_, b)| Self::reading_order_cmp(&a.polygon, &b.polygon));
 
         // Convert to TextSpans with sequence numbers
@@ -365,7 +365,7 @@ mod tests {
         assert_eq!(result.text(), "Hello World");
     }
 
-    // #08: the reading-order comparator must be a TOTAL ORDER. The old
+    // The reading-order comparator must be a TOTAL ORDER. The old
     // "compare X when |Δy| < 10, else compare Y" rule was intransitive on
     // near-aligned boxes and made Rust's sort panic (aborting the host
     // process). Brute-force antisymmetry + transitivity over a set that

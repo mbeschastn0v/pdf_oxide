@@ -857,7 +857,7 @@ impl MarkdownOutputConverter {
         // Reject a bare ordinal suffix (`st`/`nd`/`rd`/`th`) left stranded when a
         // superscript ordinal is split from its number ("May 5th" → "May 5" +
         // superscript "th"). On its own it is never a heading; promoting it emits
-        // a stray "#### th" that fragments the document outline (#07).
+        // a stray "#### th" that fragments the document outline.
         if matches!(trimmed.to_ascii_lowercase().as_str(), "st" | "nd" | "rd" | "th") {
             return false;
         }
@@ -2091,7 +2091,7 @@ mod tests {
 
     #[test]
     fn test_bare_ordinal_suffix_is_not_a_heading() {
-        // #07: a stranded superscript ordinal must never be promoted to a heading.
+        // A stranded superscript ordinal must never be promoted to a heading.
         for ord in ["st", "nd", "rd", "th", "ST", "Th", " th "] {
             assert!(
                 !MarkdownOutputConverter::is_valid_heading_text(ord),

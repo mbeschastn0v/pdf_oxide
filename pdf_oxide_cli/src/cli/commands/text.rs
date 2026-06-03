@@ -23,7 +23,7 @@ pub fn run(
 
     // `structured` is inherently structured JSON (typed regions with column
     // assignment), so it is emitted as JSON regardless of the `--json` flag and
-    // ignores `--area` (it operates on the whole page). #626 / #536.
+    // ignores `--area` (it operates on the whole page).
     if format == "structured" {
         let mut all_pages = Vec::new();
         for &page_idx in &page_indices {

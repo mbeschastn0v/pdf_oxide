@@ -79,7 +79,7 @@ impl CMap {
     /// 3. `notdef_ranges` fallback.
     ///
     /// `chars` is checked first and holds the document-order-correct value for
-    /// any code a later `bfchar` redefined (§9.10.3 / #619); `ranges` only holds
+    /// any code a later `bfchar` redefined (§9.10.3); `ranges` only holds
     /// runs that were contiguous in the final `chars` state.
     pub fn get(&self, code: &u32) -> Option<std::borrow::Cow<'_, str>> {
         if let Some(s) = self.chars.get(code) {
@@ -118,7 +118,7 @@ impl CMap {
     /// expands to ~65 536 `String`s, shared via `Arc` in the global cache).
     ///
     /// Operates on the *final* `chars` state, so any code a later definition
-    /// redefined already holds the document-order-correct value (§9.10.3 / #619)
+    /// redefined already holds the document-order-correct value (§9.10.3)
     /// — compressing it cannot change semantics. A run is collapsed only when
     /// both the code and its single-char codepoint are contiguous and the run
     /// is long enough to be worth it; multi-char (ligature) values and
@@ -1012,7 +1012,7 @@ mod tests {
 
     #[test]
     fn test_bfchar_override_survives_range_compression() {
-        // #619: a bfchar after a bfrange wins for that code; compression must
+        // A bfchar after a bfrange wins for that code (§9.10.3); compression must
         // not swallow it (it breaks contiguity and stays in `chars`).
         let data = b"beginbfrange\n<0100> <0300> <0500>\nendbfrange\n\
                      beginbfchar\n<0200> <0041>\nendbfchar";

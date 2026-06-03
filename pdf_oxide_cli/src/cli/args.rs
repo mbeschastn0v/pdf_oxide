@@ -52,8 +52,7 @@ pub enum Command {
         ///
         /// `structured` emits `StructuredPage` JSON per page — typed regions with
         /// `kind` (RegionRole), `column_index` and bbox — so two-column layouts
-        /// come out as separate column blocks rather than line-interleaved
-        /// (#626 / #536).
+        /// come out as separate column blocks rather than line-interleaved.
         #[arg(long, value_parser = ["plain", "words", "lines", "structured"], default_value = "plain")]
         format: String,
 

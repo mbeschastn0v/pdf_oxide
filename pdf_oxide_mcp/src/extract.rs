@@ -382,7 +382,7 @@ mod tests {
         assert!(out.exists());
     }
 
-    // #626: the `structured` format must expose `extract_structured` —
+    // The `structured` format must expose `extract_structured` —
     // StructuredPage JSON with typed regions and per-region column_index.
     #[test]
     fn test_extract_structured_to_file() {

@@ -14281,7 +14281,7 @@ impl PdfDocument {
             }
         }
 
-        // #05: a scanned / image page produces no extractable text and would
+        // A scanned / image page produces no extractable text and would
         // render as a silently-blank page. Emit a visible marker so a reader
         // knows content was lost and OCR is required, rather than dropping
         // (on a scanned corpus) ~half the document with no explanation. Gated

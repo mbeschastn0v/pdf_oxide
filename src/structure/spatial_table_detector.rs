@@ -248,7 +248,7 @@ fn passes_spatial_quality_gate(table: &Table) -> bool {
     // A genuine numeric data table (financial / metrics slides) is legitimately
     // almost all single tokens — every cell is a *number* — so the generic
     // single-word prose gate below would wrongly reject it and flatten it into a
-    // bold label plus run-on numbers (v0.3.59 repros #03 / #14). Bypass the gate
+    // bold label plus run-on numbers. Bypass the gate
     // ONLY when the table is clearly numeric-DOMINATED (≥50% of non-empty cells
     // are data values). This is deliberately strict: number-heavy prose (an
     // academic page with inline citations/equations whose words happen to align
@@ -3816,7 +3816,7 @@ mod tests {
             is_header: false,
         };
         // A dense numeric metrics table: ~all single-token numeric cells. Must
-        // PASS (the prose ratio excludes data values) — repro #03.
+        // PASS (the prose ratio excludes data values).
         let mut numeric = Table::new();
         numeric.col_count = 8;
         for r in [

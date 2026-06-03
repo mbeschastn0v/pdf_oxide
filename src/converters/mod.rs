@@ -338,7 +338,7 @@ pub struct ConversionOptions {
     /// extractable text but is a scanned / image page (rasterised content with
     /// no usable text layer). Without it, ~half the pages of a scanned corpus
     /// render as silently-blank, with no indication that content was lost and
-    /// OCR is required (#05). The marker is a block-quote naming the page.
+    /// OCR is required. The marker is a block-quote naming the page.
     ///
     /// Default: `true`. Set `false` to keep scanned pages blank.
     pub annotate_skipped_pages: bool,

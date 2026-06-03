@@ -1,4 +1,4 @@
-//! #626: the `text --format structured` CLI path must expose the library's
+//! The `text --format structured` CLI path exposes the library's
 //! `extract_structured` API — emitting `StructuredPage` JSON with typed regions
 //! and per-region `column_index`, so two-column PDFs are not line-interleaved.
 //!
