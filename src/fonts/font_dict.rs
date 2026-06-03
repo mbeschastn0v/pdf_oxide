@@ -958,11 +958,23 @@ impl FontInfo {
 
         // Parse CFF GID mapping ONLY for simple (non-Type0) fonts with embedded CFF data.
         // Type0/CID fonts use Identity-H encoding and CIDToGIDMap, not CFF Standard Encoding.
+        //
+        // §9.6.6: the byte → GID resolution must use the PDF font dictionary's
+        // /Encoding as the byte → glyph-name source and the CFF Charset as the
+        // glyph-name → GID resolver. Subsetter-emitted custom CFF Encoding
+        // tables are frequently sparse (some prepress subsetters emit only
+        // `space` and `A`) and would silently drop most content bytes to
+        // `.notdef` without this routing.
         let cff_gid_map = if subtype != "Type0" {
             embedded_font_data.as_ref().and_then(|data| {
-                super::cff_encoding::parse_cff_gid_mapping(data).inspect(|map| {
+                super::cff_encoding::parse_cff_gid_mapping_with_pdf_encoding(
+                    data,
+                    &encoding,
+                    &diff_glyph_names,
+                )
+                .inspect(|map| {
                     log::debug!(
-                        "Font '{}': parsed CFF GID mapping ({} entries)",
+                        "Font '{}': parsed CFF GID mapping via PDF /Encoding ({} entries)",
                         base_font,
                         map.len()
                     );
