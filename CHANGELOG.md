@@ -2,7 +2,7 @@
 
 All notable changes to PDFOxide are documented here.
 
-## [0.3.60] - 2026-06-02
+## [0.3.60] - 2026-06-03
 
 > Converter performance sweep (no double per-page extraction, cached structure-tree traversal) + Arabic/Persian CIDFont extraction, ZapfDingbats coverage, graceful encrypted-PDF text extraction, and an `extract_tables` opt-out for speed-first text extraction
 
