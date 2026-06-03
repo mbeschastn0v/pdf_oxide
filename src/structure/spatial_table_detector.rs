@@ -245,12 +245,43 @@ fn passes_spatial_quality_gate(table: &Table) -> bool {
     if non_empty.is_empty() {
         return true;
     }
+    // A genuine numeric data table (financial / metrics slides) is legitimately
+    // almost all single tokens — every cell is a *number* — so the generic
+    // single-word prose gate below would wrongly reject it and flatten it into a
+    // bold label plus run-on numbers (v0.3.59 repros #03 / #14). Bypass the gate
+    // ONLY when the table is clearly numeric-DOMINATED (≥50% of non-empty cells
+    // are data values). This is deliberately strict: number-heavy prose (an
+    // academic page with inline citations/equations whose words happen to align
+    // into columns) stays below 50% numeric and is still held to the prose gate,
+    // so the bypass does not manufacture false tables.
+    let data_values = non_empty.iter().filter(|t| is_data_value(t)).count();
+    if data_values * 2 >= non_empty.len() {
+        return true;
+    }
+    // Otherwise: high single-word density is the signature of prose split into
+    // one-word columns by aligned inter-word gaps — reject.
     let single_word_count = non_empty
         .iter()
         .filter(|t| t.split_whitespace().count() <= 1)
         .count();
     let ratio = single_word_count as f32 / non_empty.len() as f32;
     ratio <= 0.7
+}
+
+/// A numeric / data value token: digits plus the usual numeric punctuation
+/// (decimal point, thousands comma, percent, sign, currency). Requires at least
+/// one digit so a bare `+` or `$` is not treated as data. Used so numeric-table
+/// cells do not read as prose fragments in the spatial quality gate.
+fn is_data_value(t: &str) -> bool {
+    !t.is_empty()
+        && t.chars().any(|c| c.is_ascii_digit())
+        && t.chars().all(|c| {
+            c.is_ascii_digit()
+                || matches!(
+                    c,
+                    '.' | ',' | '%' | '+' | '-' | '\u{2212}' | '$' | '\u{20AC}' | '\u{00A3}'
+                )
+        })
 }
 
 /// Reject a spatial (no-rulings) "table" whose rows are wrapped paragraph
@@ -3766,6 +3797,70 @@ mod tests {
             .map(|&x| col_at(x))
             .collect();
         assert!(!is_regular_lattice(&irregular));
+    }
+
+    #[test]
+    fn test_is_data_value() {
+        for v in ["5,012", "+2%", "240", "-1.5", "1,000.50", "67", "\u{2212}3"] {
+            assert!(is_data_value(v), "{v:?} should be a data value");
+        }
+        for w in ["FY22", "Mercury", "Body", "", "YoY", "$", "+", "Q1"] {
+            assert!(!is_data_value(w), "{w:?} should NOT be a data value");
+        }
+    }
+
+    #[test]
+    fn test_quality_gate_admits_numeric_table_rejects_prose_split() {
+        let row = |cells: &[&str]| TableRow {
+            cells: cells.iter().map(|c| prose_cell(c)).collect(),
+            is_header: false,
+        };
+        // A dense numeric metrics table: ~all single-token numeric cells. Must
+        // PASS (the prose ratio excludes data values) — repro #03.
+        let mut numeric = Table::new();
+        numeric.col_count = 8;
+        for r in [
+            ["Body", "FY22", "FY23", "FY24", "FY25", "YoY", "Plan", "Var"],
+            [
+                "Mercury Transits",
+                "5,012",
+                "5,210",
+                "5,488",
+                "5,612",
+                "+2%",
+                "5,600",
+                "+12",
+            ],
+            [
+                "Venus Phases",
+                "1,840",
+                "1,902",
+                "1,975",
+                "2,041",
+                "+3%",
+                "2,030",
+                "+11",
+            ],
+        ] {
+            numeric.rows.push(row(&r));
+        }
+        assert!(
+            passes_spatial_quality_gate(&numeric),
+            "dense numeric table must pass the spatial quality gate"
+        );
+
+        // Prose accidentally split into single-word columns must still be REJECTED.
+        let mut prose = Table::new();
+        prose.col_count = 6;
+        for _ in 0..3 {
+            prose
+                .rows
+                .push(row(&["the", "quick", "brown", "fox", "jumps", "over"]));
+        }
+        assert!(
+            !passes_spatial_quality_gate(&prose),
+            "word-dominated single-word split must still be rejected"
+        );
     }
 
     fn prose_cell(text: &str) -> TableCell {
