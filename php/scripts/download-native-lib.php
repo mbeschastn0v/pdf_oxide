@@ -37,7 +37,7 @@ declare(strict_types=1);
  *   - Set `PDF_OXIDE_NATIVE_VERSION=vX.Y.Z` to pin a specific release.
  */
 
-const PACKAGE_VERSION_DEFAULT = 'v0.3.59';
+const PACKAGE_VERSION_DEFAULT = 'v0.3.60';
 const RELEASE_BASE_URL = 'https://github.com/yfedoseev/pdf_oxide/releases/download';
 // Path is relative to the package root (parent-of-php in the new
 // root-composer.json layout); see comment on $packageRoot below.
