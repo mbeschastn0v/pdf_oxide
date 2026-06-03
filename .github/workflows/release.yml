@@ -1492,7 +1492,12 @@ jobs:
         run: cargo cyclonedx --format json --spec-version 1.5 --override-filename sbom.cdx
 
       - name: Upload SBOM to release
-        run: gh release upload "${{ github.ref_name }}" sbom.cdx.json
+        # --clobber overwrites an existing asset of the same name instead of
+        # erroring, so a `gh run rerun --failed` of Create GitHub Release stays
+        # idempotent and does not cascade-skip the publish jobs (#548). Matches
+        # the overwrite behaviour softprops/action-gh-release already uses for
+        # the main release assets.
+        run: gh release upload "${{ github.ref_name }}" sbom.cdx.json --clobber
         env:
           GH_TOKEN: ${{ github.token }}
 
