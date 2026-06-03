@@ -1706,7 +1706,7 @@ pub struct WasmDss {
 }
 
 #[cfg(feature = "signatures")]
-#[wasm_bindgen]
+#[wasm_bindgen(js_class = "Dss")]
 impl WasmDss {
     /// Number of DER X.509 certificates in the DSS.
     #[wasm_bindgen(getter, js_name = "certCount")]
