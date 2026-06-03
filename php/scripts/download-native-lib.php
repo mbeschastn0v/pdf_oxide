@@ -253,12 +253,12 @@ function downloadFile(string $url, string $dest): bool
         'http' => [
             'follow_location' => 1,
             'timeout' => 60,
-            'user_agent' => 'pdf_oxide-php-installer/0.3.59',
+            'user_agent' => 'pdf_oxide-php-installer/0.3.60',
         ],
         'https' => [
             'follow_location' => 1,
             'timeout' => 60,
-            'user_agent' => 'pdf_oxide-php-installer/0.3.59',
+            'user_agent' => 'pdf_oxide-php-installer/0.3.60',
         ],
     ]);
     $data = @file_get_contents($url, false, $ctx);
