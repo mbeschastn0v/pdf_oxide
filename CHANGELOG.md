@@ -2,6 +2,25 @@
 
 All notable changes to PDFOxide are documented here.
 
+## [0.3.63] - 2026-06-09
+
+> CJK extraction-quality fixes — vertical-CJK (tategaki) reading order no longer mis-fires on horizontal Japanese text, CJK glyphs no longer surface as Kangxi-radical codepoints, and Korean number spacing is preserved — plus recovery of dropped inter-word spaces on tightly-typeset PDFs, and routine dependency updates.
+
+### Fixed
+
+- **Dropped inter-word spaces on tightly-typeset PDFs (#724, #725)** — text drawn one glyph per `Tj` with incremental `Td` offsets and **no space glyph** (inter-word gaps are just slightly larger `Td` moves, ~0.3–0.8 × the glyph advance — common in résumé generators) was concatenated: `"JOHN DOE"` → `"JOHNDOE"`, `"Master of Science"` → `"MasterofScience"`. The characters were correct; only the word boundaries were lost, which breaks search/indexing (`"science"` can't be matched inside `"masterofscience"`). PyMuPDF and poppler `pdftotext` both infer these spaces, so oxide was the outlier against its own calibration reference. Two root causes, both fixed: (1) `FontInfo::get_space_glyph_width` returned a CID (Type0) font's `/DW` *default* width (often ≥ 0.5 em) as the "space advance" when code `0x20` has no explicit `/W` entry — the norm for Identity-H subsets, where the space glyph is rarely at `0x20` — inflating the geometric word-gap threshold above real word gaps; it now falls back to the 0.25 em typographic default unless `0x20` carries an explicit `/W` width (preserving the #656 Arabic-subset fallback). (2) the intra-word kerning guard in `should_insert_space` suppressed lowercase→lowercase boundaries up to 2.4 × the geometric threshold (≈ 0.33 em for Helvetica) — far wider than any real inter-letter kerning — swallowing genuine tight word gaps; the ceiling is lowered to 1.5 × (≈ 0.2 em), which still clears worst-case ~0.19 em intra-word kerning while admitting 0.2-em-and-wider word gaps, the same ~0.18–0.2 em word-break point PyMuPDF / poppler use.
+- **Vertical-CJK reading order mis-fired on horizontal Japanese text** — the v0.3.62 tategaki assembler counted vertical-vs-horizontal glyph adjacencies over all pairs, which false-positived on grid-aligned *horizontal* CJK (genkō-yōshi regulatory/academic layouts align glyphs in both rows and columns), scrambling the reading order and collapsing line breaks. Detection now requires single-glyph CJK spans to dominate the page — genuine tategaki positions each glyph on its own origin, while horizontal CJK is emitted as multi-character runs — and discriminates by each glyph's nearest-neighbour direction with a clear vertical majority. Ambiguous or horizontal pages fall back to the normal horizontal assembler (the pre-vertical-CJK behaviour), so a missed detection can never regress against that baseline.
+- **CJK glyphs surfaced as Kangxi/CJK *radical* codepoints** — a glyph shared between a radical and its unified ideograph could reverse-resolve to the radical form (e.g. 欠→⽋, 立→⽴, 言→⾔, 金→⾦). The CID decode path now NFKC-normalizes the CJK Radicals Supplement (U+2E80–2EFF) and Kangxi Radicals (U+2F00–2FDF) blocks — which never appear in running text — to their unified ideograph; ordinary text and fullwidth forms are untouched.
+- **Korean number spacing was wrongly stripped** — the CJK number-boundary cleanup that correctly removes stray spaces between Chinese/Japanese ideographs and embedded digits (`公元前 1000 年` → `公元前1000年`) over-fired on Korean. Korean is written with inter-word spaces, so a space between a Hangul syllable and a number is a real word boundary (`14 예` = "14 cases"); Hangul is now excluded from the cleanup.
+
+### Changed
+
+- **Dependencies** — `p12-keystore` 0.2.1 → 0.3.0 (`from_pkcs12` adapted to its new `Pkcs12ImportPolicy` API), `uuid` 1.23.2 → 1.23.3, `chrono` 0.4.44 → 0.4.45; CI actions: `actions/checkout` → 6.0.3, `astral-sh/setup-uv` → 8.2.0, `ruby/setup-ruby` → 1.312.0, `codecov/codecov-action` → 7.0.0, `taiki-e/install-action` → 2.81.8.
+
+### Thanks
+
+- **@regularkevvv (Kevin Castro)** — reported the tightly-typeset inter-word spacing bug and contributed the fix (#724, #725).
+
 ## [0.3.62] - 2026-06-09
 
 > Best-in-class text, Markdown and HTML extraction: right-to-left (Arabic/Hebrew) and vertical-CJK (tategaki) reading order across every format, untagged multi-column reading order, table / list / heading / hyperlink structure fidelity, paragraph reflow and fenced code blocks, correct display of flattened form fields (incl. CJK/emoji), hyperlink-URI XSS hardening, and an OCR-augmented `auto` extraction mode that is a strict superset of native output on text, Markdown and HTML.

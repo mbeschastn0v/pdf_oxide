@@ -1022,11 +1022,17 @@ pub(crate) fn is_pictographic(c: char) -> bool {
 }
 
 /// Remove an ASCII space sitting directly between a CJK ideograph/kana and an
-/// ASCII digit (either direction). In CJK writing an embedded number attaches to
-/// the surrounding ideographs with no space (e.g. "公元前1000年", "10,000年");
-/// some producers — notably headless-browser print-to-PDF — emit a stray space
-/// glyph at that script transition. CJK↔CJK and CJK↔letter spacing is left
-/// untouched, so genuine word/term spacing is preserved.
+/// ASCII digit (either direction). In Chinese and Japanese an embedded number
+/// attaches to the surrounding ideographs with no space (e.g. "公元前1000年",
+/// "10,000年"); some producers — notably headless-browser print-to-PDF — emit a
+/// stray space glyph at that script transition. CJK↔CJK and CJK↔letter spacing
+/// is left untouched, so genuine word/term spacing is preserved.
+///
+/// Hangul is deliberately EXCLUDED: Korean, unlike Chinese/Japanese, is written
+/// with inter-word spaces, so a space between a Korean syllable and a number is
+/// a real word boundary (e.g. "14 예" = "14 cases", "7 예중") — stripping it
+/// corrupts the text. Only the space-less scripts (CJK ideographs + kana) are
+/// treated as number-adjacent.
 pub(crate) fn strip_cjk_digit_boundary_spaces(text: &str) -> String {
     if !text.contains(' ') {
         return text.to_string();
@@ -1036,7 +1042,6 @@ pub(crate) fn strip_cjk_digit_boundary_spaces(text: &str) -> String {
             0x3040..=0x30FF      // Hiragana + Katakana
             | 0x3400..=0x4DBF    // CJK Ext A
             | 0x4E00..=0x9FFF    // CJK Unified
-            | 0xAC00..=0xD7AF    // Hangul syllables
             | 0x20000..=0x2A6DF  // CJK Ext B
             | 0xFF66..=0xFF9F    // Halfwidth Katakana
         )
@@ -1338,12 +1343,23 @@ fn should_insert_space(
     // the cluster but no explicit TJ offset crossed the threshold).
     // See the sibling guard in `process_tj_array_tiebreaker` for the
     // upstream space-as-span insertion path.
-    // 1.2 × full space-glyph advance. Any gap below that, between two
-    // alphabetic runs, is far more likely to be inter-letter kerning
-    // emitted by LaTeX or a Word-style exporter than a real word
-    // boundary. Real producer word gaps either match the space-glyph
-    // width plus the producer's word-spacing pad, or sit next to
-    // non-letter characters that fall through this guard.
+    //
+    // Ceiling = 1.5 × `geometric_threshold` (= 0.75 × space-glyph width,
+    // ≈ 0.2 em for a typical 0.25-em space). Inter-letter kerning is a
+    // property of font size — realistic microtype / Word letter-spacing
+    // is a few percent of the em and sits just above the 0.5-space-width
+    // threshold, never far beyond it. The previous 2.4× ceiling
+    // (≈ 1.2 × a full space-glyph advance, ≈ 0.33 em for Helvetica) was
+    // far wider than any real kerning and swallowed genuine *tight* word
+    // gaps between lowercase words — the dominant cause of
+    // "MasterofScience" / "Resultsdriven" gluing on resume-style PDFs
+    // that position words via small Td offsets. 1.5× still clears
+    // worst-case ~0.19-em intra-word kerning (including the ~0.15-em
+    // LaTeX/microtype letter-spacing case) while letting a
+    // 0.2-em-and-wider word gap through to the consensus path — the same
+    // ~0.18-0.2-em word-break point PyMuPDF / poppler use. Gaps in the
+    // overlap zone (wide letter-tracking in titles, ~0.28 em) are not
+    // separable from real word gaps by magnitude alone and fall through.
     //
     // Only fires when the font is available so the threshold is
     // computed from the font's own space-glyph advance — the no-font
@@ -1351,7 +1367,7 @@ fn should_insert_space(
     // conservative value that already separates real word gaps from
     // kerning at the consensus level.
     let kerning_guard_threshold = if fonts.contains_key(font_name) {
-        Some(geometric_threshold * 2.4)
+        Some(geometric_threshold * 1.5)
     } else {
         None
     };
@@ -1367,7 +1383,7 @@ fn should_insert_space(
                 // path, avoiding word-gluing like "APPENDIXA" or "OLIVERA.".
                 if pc.is_lowercase() && nc.is_lowercase() {
                     log::debug!(
-                        "intra-word kerning guard: suppressing space between '{pc}' and '{nc}' (gap={gap_pt:.2}pt < {thr:.2}pt, threshold = 1.2× space-glyph width)"
+                        "intra-word kerning guard: suppressing space between '{pc}' and '{nc}' (gap={gap_pt:.2}pt < {thr:.2}pt, threshold = 0.75× space-glyph width)"
                     );
                     return SpaceDecision::no_space(SpaceSource::NoSpace, 0.9);
                 }
@@ -13249,9 +13265,13 @@ mod tests {
         // both ends; the number itself is preserved.
         assert_eq!(strip_cjk_digit_boundary_spaces("公元前 1000 年"), "公元前1000年");
         assert_eq!(strip_cjk_digit_boundary_spaces("追溯至 10,000 年前"), "追溯至10,000年前");
-        // Works for Japanese/Korean ideographs too.
+        // Works for Japanese ideographs/kana too.
         assert_eq!(strip_cjk_digit_boundary_spaces("西暦 2024 年"), "西暦2024年");
-        assert_eq!(strip_cjk_digit_boundary_spaces("약 1 만년"), "약1만년");
+        // Korean (Hangul) is EXCLUDED — Korean uses inter-word spaces, so a
+        // space between a syllable and a number is a real word boundary and
+        // must be preserved ("14 예" = "14 cases", "7 예중").
+        assert_eq!(strip_cjk_digit_boundary_spaces("약 1 만년"), "약 1 만년");
+        assert_eq!(strip_cjk_digit_boundary_spaces("기질은 14 예에서"), "기질은 14 예에서");
         // Legitimate spacing is preserved.
         assert_eq!(strip_cjk_digit_boundary_spaces("貓 通常"), "貓 通常"); // CJK↔CJK
         assert_eq!(strip_cjk_digit_boundary_spaces("catus 펠리스"), "catus 펠리스"); // letter↔CJK

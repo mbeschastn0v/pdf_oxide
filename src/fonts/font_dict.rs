@@ -3272,19 +3272,37 @@ impl FontInfo {
     ///
     /// # Returns
     ///
-    /// The width of the space character (code 0x20) in 1000ths of em,
-    /// or the font's default width if the space glyph is not defined.
+    /// The width of the space character (code 0x20) in 1000ths of em. When no
+    /// real space glyph is defined — a simple font with a near-zero 0x20, or a
+    /// CID font with no explicit /W entry for 0x20 — returns the 0.25 em (250)
+    /// typographic default rather than the font's (often much wider) /DW.
     pub fn get_space_glyph_width(&self) -> f32 {
+        // CID-keyed (Type0) fonts almost never place the space glyph at code
+        // 0x20 under Identity-H, so `get_glyph_width(0x20)` falls through to the
+        // font's *default* width (/DW) — commonly 0.5 em or wider. That default
+        // is NOT a space advance. Callers derive their geometric word-gap
+        // threshold from this width (threshold = space_width × ratio); feeding
+        // the inflated /DW in makes the threshold so large that tightly typeset
+        // word gaps — words positioned with incremental Td offsets and no space
+        // glyph — fall below it and glue together ("Master of Science" ->
+        // "MasterofScience"). PyMuPDF / poppler infer those spaces; oxide was
+        // the outlier. Trust code 0x20 only when it is an explicit /W entry;
+        // otherwise fall back to the 0.25 em typographic default.
+        if self.subtype == "Type0" {
+            return match self.cid_widths.as_ref().and_then(|w| w.get(&0x20)) {
+                Some(&w) if w >= 50.0 => w,
+                _ => 250.0,
+            };
+        }
         // Space character is always code 0x20 (32) in PDF.
         let w = self.get_glyph_width(0x20);
-        // Many CID-keyed subset fonts (notably shaped Arabic from Chrome /
+        // Many simple subset fonts (notably shaped Arabic from Chrome /
         // browser print) omit a glyph for code 0x20 entirely, so this returns
-        // ~0. Callers derive their geometric word-gap threshold from this
-        // width (threshold = space_width × ratio); a zero width collapses the
-        // threshold to 0, so *every* inter-glyph kerning gap is read as a word
-        // boundary and cursive Arabic words shatter into single letters (#656).
-        // Fall back to a typographic default of 0.25 em (250 font units) — the
-        // same value `should_insert_space` uses when the font is absent.
+        // ~0. A zero width collapses the threshold to 0, so *every* inter-glyph
+        // kerning gap is read as a word boundary and cursive Arabic words
+        // shatter into single letters. Fall back to a typographic
+        // default of 0.25 em (250 font units) — the same value
+        // `should_insert_space` uses when the font is absent.
         if w < 50.0 {
             250.0
         } else {
@@ -3651,7 +3669,9 @@ impl FontInfo {
                 return cached.clone();
             }
         }
-        let result = self.char_to_unicode_uncached(char_code);
+        let result = self
+            .char_to_unicode_uncached(char_code)
+            .map(|s| normalize_cjk_radical_forms(&s));
         if let Ok(mut memo) = self.type0_unicode_memo.lock() {
             memo.insert(char_code, result.clone());
         }
@@ -4731,6 +4751,37 @@ fn shift_jis_to_unicode(code: u16) -> Option<char> {
         return None;
     }
     Some(c)
+}
+
+/// Normalize CJK radical "presentation" codepoints to their canonical unified
+/// ideograph: CJK Radicals Supplement (U+2E80–2EFF) and Kangxi Radicals
+/// (U+2F00–2FDF). These blocks hold the radical glyphs used in dictionaries and
+/// are never part of running text — but a font cmap that maps a glyph shared
+/// between a radical and its ideograph to the *radical* codepoint (and a
+/// GID→Unicode reverse lookup that then prefers it) surfaces e.g. 欠→⽋, 立→⽴.
+/// NFKC carries each radical to its ideograph; only chars inside the two radical
+/// blocks are touched, so legitimate text (incl. fullwidth forms) is unchanged.
+/// Fast-path returns the input untouched when it contains no radical-block char.
+fn normalize_cjk_radical_forms(s: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    fn is_radical(c: char) -> bool {
+        // CJK Radicals Supplement (U+2E80–2EFF) + Kangxi Radicals (U+2F00–2FDF),
+        // which are contiguous, so a single range covers both blocks.
+        matches!(c as u32, 0x2E80..=0x2FDF)
+    }
+    if !s.chars().any(is_radical) {
+        return s.to_string();
+    }
+    s.chars()
+        .flat_map(|c| {
+            if is_radical(c) {
+                // NFKC-decompose just this radical glyph to its ideograph.
+                Box::new(c.nfkc()) as Box<dyn Iterator<Item = char>>
+            } else {
+                Box::new(std::iter::once(c)) as Box<dyn Iterator<Item = char>>
+            }
+        })
+        .collect()
 }
 
 pub(crate) fn glyph_name_to_unicode(glyph_name: &str) -> Option<char> {
@@ -8871,6 +8922,18 @@ mod tests {
             f.default_width = 333.0;
         });
         assert_eq!(font.get_space_glyph_width(), 333.0);
+    }
+
+    #[test]
+    fn test_normalize_cjk_radical_forms() {
+        // Kangxi Radicals (U+2F00–2FDF) → unified ideograph.
+        assert_eq!(normalize_cjk_radical_forms("⽋点"), "欠点");
+        assert_eq!(normalize_cjk_radical_forms("⽴⾮⾔⾦"), "立非言金");
+        // Mixed radical + normal text: only the radical is rewritten.
+        assert_eq!(normalize_cjk_radical_forms("実⽴確率"), "実立確率");
+        // Fast path: no radical-block char → returned unchanged (incl. fullwidth).
+        assert_eq!(normalize_cjk_radical_forms("欠点０１２"), "欠点０１２");
+        assert_eq!(normalize_cjk_radical_forms("hello"), "hello");
     }
 
     // =========================================================================

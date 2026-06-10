@@ -5097,10 +5097,10 @@ impl PdfDocument {
     /// assembled exactly as [`extract_text_with_options`](Self::extract_text_with_options)
     /// would, so the native text is byte-for-byte preserved; the extra spans
     /// only add content, sorted in by their bounding box.
-    // Callers live behind the `ocr` feature (the Auto extractor) and in tests;
-    // without `ocr` a plain `--lib` build sees no caller, so silence dead_code
-    // only in that configuration (CI builds with `-D warnings`).
-    #[cfg_attr(not(feature = "ocr"), allow(dead_code))]
+    // Only the Auto extractor (behind the `ocr` feature) and the unit test that
+    // pins span placement call this, so it is compiled only in those configs —
+    // a plain non-`ocr` `--lib` build omits it entirely (no dead code).
+    #[cfg(any(feature = "ocr", test))]
     pub(crate) fn extract_text_with_extra_spans(
         &self,
         page_index: usize,
@@ -5144,6 +5144,26 @@ impl PdfDocument {
         if cjk.len() < 8 {
             return None;
         }
+        // Tategaki signature: vertical writing positions each glyph on its own
+        // origin, so a genuine vertical-CJK page is composed of SINGLE-glyph
+        // spans. Horizontal CJK is emitted as multi-character runs (a whole
+        // word/line per show op). The column-major geometry below assumes glyph
+        // cells; on run-level spans the nearest neighbour of a run is the run on
+        // the line above/below (vertical), so a horizontal page is mis-detected
+        // as vertical and its reading order is shredded. Require single-glyph
+        // CJK spans to be the majority before treating the page as vertical;
+        // otherwise fall back to the horizontal assembler (the pre-vertical-CJK
+        // behaviour, so a missed detection never regresses against it).
+        let single_glyph_cjk = cjk
+            .iter()
+            .filter(|s| {
+                let t = s.text.trim();
+                t.chars().count() == 1 && t.chars().all(is_cjk)
+            })
+            .count();
+        if single_glyph_cjk * 2 < cjk.len() {
+            return None;
+        }
         // CJK must be the clear majority of the page's non-space glyphs.
         let total_chars: usize = spans
             .iter()
@@ -5157,41 +5177,59 @@ impl PdfDocument {
             return None;
         }
 
-        // Glyph cell size from the median-ish span box (CJK glyphs are square).
+        // Glyph cell width from the median-ish span box (CJK glyphs are square);
+        // used to band columns when sorting column-major below.
         let mut widths: Vec<f32> = cjk
             .iter()
             .map(|s| s.bbox.width)
             .filter(|w| *w > 0.0)
             .collect();
-        let mut heights: Vec<f32> = cjk
-            .iter()
-            .map(|s| s.bbox.height)
-            .filter(|h| *h > 0.0)
-            .collect();
-        if widths.is_empty() || heights.is_empty() {
+        if widths.is_empty() {
             return None;
         }
         widths.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        heights.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let gw = widths[widths.len() / 2];
-        let gh = heights[heights.len() / 2];
 
-        // Count vertical vs horizontal neighbour pairs (capped for O(n²) cost).
+        // Discriminate vertical (tategaki) from horizontal CJK by each glyph's
+        // NEAREST-neighbour direction (capped for O(n²) cost). The earlier
+        // all-pairs `vert > horiz` count mis-classified grid-aligned HORIZONTAL
+        // CJK — genkō-yōshi regulatory/academic text aligns glyphs in both rows
+        // and columns, so vertical and horizontal adjacencies are about equal
+        // and noise tipped the page to "vertical", scrambling its reading order
+        // and collapsing line breaks. A glyph's single closest neighbour is the
+        // next glyph in its own line: horizontally adjacent for horizontal text
+        // (intra-row pitch < inter-row leading), vertically adjacent for
+        // tategaki (intra-column pitch < inter-column gutter). Only assemble
+        // column-major when vertical nearest-neighbours clearly dominate
+        // (> 2×). Otherwise fall back to the normal horizontal path — which is
+        // also the pre-vertical-CJK (≤ 0.3.61) behaviour, so a missed detection
+        // never regresses against that baseline.
         let sample = &cjk[..cjk.len().min(250)];
         let (mut vert, mut horiz) = (0usize, 0usize);
         for (i, a) in sample.iter().enumerate() {
-            for b in sample.iter().skip(i + 1) {
-                let dx = (a.bbox.x - b.bbox.x).abs();
-                let dy = (a.bbox.y - b.bbox.y).abs();
-                if dx < gw * 0.5 && dy > gh * 0.5 && dy < gh * 1.5 {
-                    vert += 1;
-                } else if dy < gh * 0.5 && dx > gw * 0.5 && dx < gw * 1.5 {
-                    horiz += 1;
+            let (mut best, mut bdx, mut bdy) = (f32::MAX, 0.0f32, 0.0f32);
+            for (j, b) in sample.iter().enumerate() {
+                if i == j {
+                    continue;
                 }
+                let dx = a.bbox.x - b.bbox.x;
+                let dy = a.bbox.y - b.bbox.y;
+                let d2 = dx * dx + dy * dy;
+                if d2 < best {
+                    best = d2;
+                    bdx = dx.abs();
+                    bdy = dy.abs();
+                }
+            }
+            // Classify the nearest neighbour's dominant axis (ties → neither).
+            if bdy > bdx {
+                vert += 1;
+            } else if bdx > bdy {
+                horiz += 1;
             }
         }
         // Require a clear vertical majority; ambiguous or horizontal → None.
-        if vert == 0 || vert <= horiz {
+        if vert == 0 || vert <= horiz * 2 {
             return None;
         }
 
@@ -15613,7 +15651,9 @@ impl PdfDocument {
     /// [`extract_text_with_extra_spans`](Self::extract_text_with_extra_spans).
     /// The Auto extractor uses this to drop OCR'd image text into its figure's
     /// reading-order slot for Markdown, so auto markdown is a superset of native.
-    #[cfg_attr(not(feature = "ocr"), allow(dead_code))]
+    // Only the (ocr-gated) Auto extractor calls this, so compile it only with
+    // the `ocr` feature — a non-`ocr` build omits it (no dead code).
+    #[cfg(feature = "ocr")]
     pub(crate) fn to_markdown_with_extra_spans(
         &self,
         page_index: usize,
@@ -16133,7 +16173,9 @@ impl PdfDocument {
     /// Convert a page to HTML with caller-supplied extra spans merged into the
     /// converter's reading-order pass — the HTML companion to
     /// [`to_markdown_with_extra_spans`](Self::to_markdown_with_extra_spans).
-    #[cfg_attr(not(feature = "ocr"), allow(dead_code))]
+    // Only the (ocr-gated) Auto extractor calls this, so compile it only with
+    // the `ocr` feature — a non-`ocr` build omits it (no dead code).
+    #[cfg(feature = "ocr")]
     pub(crate) fn to_html_with_extra_spans(
         &self,
         page_index: usize,
@@ -19921,6 +19963,27 @@ mod tests {
             mk("\u{516D}", 152.0),
             mk("\u{4E03}", 170.0),
             mk("\u{516B}", 188.0),
+        ];
+        assert!(PdfDocument::try_assemble_vertical_cjk(&spans).is_none());
+    }
+
+    #[test]
+    fn test_try_assemble_vertical_cjk_multichar_runs_returns_none() {
+        // Horizontal CJK emitted as multi-character RUNS (a whole line per show
+        // op), stacked top-to-bottom. Each run's nearest neighbour is the run on
+        // the line above/below (vertical) — but these are horizontal lines, not
+        // tategaki columns. The single-glyph-span gate must keep this on the
+        // horizontal path so the reading order is not shredded.
+        let mk = |t: &str, y: f32| make_test_span(t, 60.0, y, 200.0, 18.0);
+        let spans = vec![
+            mk("標準マーケットモデルは", 700.0),
+            mk("次元で説明することは", 680.0),
+            mk("取引できない商品がマ", 660.0),
+            mk("クロ経済変数などである", 640.0),
+            mk("モデルを考えることは", 620.0),
+            mk("可能で非完備の場合は", 600.0),
+            mk("リスク中立確率は一意", 580.0),
+            mk("ではなく価格も一意でない", 560.0),
         ];
         assert!(PdfDocument::try_assemble_vertical_cjk(&spans).is_none());
     }

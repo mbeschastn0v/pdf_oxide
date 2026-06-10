@@ -112,17 +112,27 @@ impl SigningCredentials {
     /// additional certificates in the bag become the chain.
     #[cfg(feature = "signatures")]
     pub fn from_pkcs12(data: &[u8], password: &str) -> Result<Self> {
-        let ks = p12_keystore::KeyStore::from_pkcs12(data, password)
-            .map_err(|e| Error::InvalidPdf(format!("PKCS#12 parse error: {e}")))?;
+        // p12-keystore 0.3 requires an explicit import policy; `Strict` is the
+        // crate default and matches the prior 0.2 behaviour — pair each private
+        // key with its matched certificate chain, ignoring unmatched keys and
+        // untrusted certificates.
+        let ks = p12_keystore::KeyStore::from_pkcs12(
+            data,
+            password,
+            p12_keystore::Pkcs12ImportPolicy::Strict,
+        )
+        .map_err(|e| Error::InvalidPdf(format!("PKCS#12 parse error: {e}")))?;
 
         let (_, pkc) = ks
             .private_key_chain()
             .ok_or_else(|| Error::InvalidPdf("PKCS#12 contains no private key".into()))?;
 
-        let private_key = pkc.key().to_vec();
+        // 0.3: key() returns &PrivateKey; as_der() yields the PKCS#8 DER bytes.
+        let private_key = pkc.key().as_der().to_vec();
 
-        // chain(): first entry is the entity cert, subsequent entries are intermediates/root.
-        let mut cert_iter = pkc.chain().iter();
+        // certs(): first entry is the entity cert, subsequent are intermediates/root
+        // (0.3 renamed the 0.2 `chain()` accessor and returns a &[Certificate]).
+        let mut cert_iter = pkc.certs().iter();
         let certificate = cert_iter
             .next()
             .ok_or_else(|| Error::InvalidPdf("PKCS#12 contains no certificate".into()))?
